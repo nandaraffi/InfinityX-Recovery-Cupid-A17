@@ -17,7 +17,7 @@ jobs:
       TWRP_MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
       TWRP_BRANCH: twrp-12.1
 
-      DEVICE_TREE_REPO: https://github.com/yarpiin/twrp_device_xiaomi_cupid.git
+      DEVICE_TREE_REPO: https://github.com/nandaraffi/twrp_device_xiaomi_cupid.git
       DEVICE_TREE_BRANCH: main
 
     steps:
@@ -330,9 +330,6 @@ jobs:
           source build/envsetup.sh
 
           lunch twrp_cupid-eng
-
-          # Injecting name for TWR version
-          export TW_DEVICE_VERSION="-By Nndee V1"
 
           echo
           echo "========================================"
