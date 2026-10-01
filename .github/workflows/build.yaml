@@ -1,4 +1,4 @@
-name: Build Infinity-X Recovery Cupid A17
+name: Build Cupid Recovery A17
 
 on:
   workflow_dispatch:
@@ -12,21 +12,24 @@ jobs:
 
     env:
       DEVICE: cupid
-      BUILD_TYPE: eng
-      SOURCE_DIR: infinityx
+      SOURCE_DIR: twrp
 
-      INFINITY_MANIFEST: https://github.com/ProjectInfinity-X/manifest.git
-      INFINITY_BRANCH: 17
+      TWRP_MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+      TWRP_BRANCH: twrp-12.1
 
-      DEVICE_TREE_REPO: https://github.com/cupid-development/android_device_xiaomi_cupid.git
+      DEVICE_TREE_REPO: https://github.com/yarpiin/twrp_device_xiaomi_cupid.git
       DEVICE_TREE_BRANCH: main
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # ---------------------------------------------------------
+      # FREE DISK SPACE
+      # ---------------------------------------------------------
       - name: Free disk space
         shell: bash
         run: |
@@ -34,19 +37,26 @@ jobs:
 
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/julia* || true
           sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/julia* || true
           sudo rm -rf /usr/local/share/powershell || true
           sudo rm -rf /usr/local/share/chromium || true
 
           sudo apt-get clean || true
+
           sudo docker system prune -af || true
 
           rm -rf "$HOME/.cache" || true
           rm -rf "$HOME/.gradle" || true
+          rm -rf "$RUNNER_TOOL_CACHE" || true
+          rm -rf "$AGENT_TOOLSDIRECTORY" || true
 
+          echo "=== Disk space ==="
           df -h
 
+      # ---------------------------------------------------------
+      # BUILD DEPENDENCIES
+      # ---------------------------------------------------------
       - name: Install build dependencies
         shell: bash
         run: |
@@ -93,6 +103,9 @@ jobs:
 
           git lfs install
 
+      # ---------------------------------------------------------
+      # REPO TOOL
+      # ---------------------------------------------------------
       - name: Install repo
         shell: bash
         run: |
@@ -110,23 +123,29 @@ jobs:
 
           "$HOME/bin/repo" --version
 
-      - name: Initialize Infinity-X Android 17
+      # ---------------------------------------------------------
+      # INIT TWRP 12.1 SOURCE
+      # ---------------------------------------------------------
+      - name: Initialize TWRP source
         shell: bash
         run: |
           set -eo pipefail
 
           mkdir -p "$SOURCE_DIR"
+
           cd "$SOURCE_DIR"
 
           repo init \
             --depth=1 \
             --no-repo-verify \
             --git-lfs \
-            -u "$INFINITY_MANIFEST" \
-            -b "$INFINITY_BRANCH" \
-            -g default,-mips,-darwin,-notdefault
+            -u "$TWRP_MANIFEST" \
+            -b "$TWRP_BRANCH"
 
-      - name: Sync Infinity-X source
+      # ---------------------------------------------------------
+      # SYNC TWRP
+      # ---------------------------------------------------------
+      - name: Sync TWRP source
         shell: bash
         run: |
           set -eo pipefail
@@ -142,13 +161,18 @@ jobs:
             --force-sync \
             -j2
 
-      - name: Check Cupid device tree
+      # ---------------------------------------------------------
+      # CHECK DEVICE TREE
+      # ---------------------------------------------------------
+      - name: Check Cupid recovery tree
         shell: bash
         run: |
           set -eo pipefail
 
-          test -n "$DEVICE_TREE_REPO"
-          test -n "$DEVICE_TREE_BRANCH"
+          echo "Checking:"
+          echo "$DEVICE_TREE_REPO"
+          echo "Branch:"
+          echo "$DEVICE_TREE_BRANCH"
 
           git ls-remote \
             --exit-code \
@@ -156,7 +180,10 @@ jobs:
             "$DEVICE_TREE_REPO" \
             "$DEVICE_TREE_BRANCH"
 
-      - name: Clone Cupid device tree
+      # ---------------------------------------------------------
+      # CLONE DEVICE TREE
+      # ---------------------------------------------------------
+      - name: Clone Cupid recovery tree
         shell: bash
         run: |
           set -eo pipefail
@@ -171,68 +198,151 @@ jobs:
             "$DEVICE_TREE_REPO" \
             device/xiaomi/cupid
 
-      - name: Verify Cupid tree
+      # ---------------------------------------------------------
+      # VERIFY DEVICE TREE
+      # ---------------------------------------------------------
+      - name: Verify Cupid recovery tree
         shell: bash
         run: |
           set -eo pipefail
 
           cd "$SOURCE_DIR"
 
-          echo "=== Cupid device tree ==="
+          TREE="device/xiaomi/cupid"
 
-          test -d device/xiaomi/cupid
-          test -f device/xiaomi/cupid/AndroidProducts.mk
-          test -f device/xiaomi/cupid/BoardConfig.mk
-          test -f device/xiaomi/cupid/device.mk
-          test -f device/xiaomi/cupid/Android.bp
+          echo "=== Cupid recovery tree ==="
 
-          find device/xiaomi/cupid \
-            -maxdepth 2 \
+          test -d "$TREE"
+
+          test -f "$TREE/AndroidProducts.mk"
+          test -f "$TREE/BoardConfig.mk"
+          test -f "$TREE/device.mk"
+          test -f "$TREE/twrp_cupid.mk"
+          test -f "$TREE/Android.bp"
+
+          test -f "$TREE/prebuilt/kernel"
+
+          echo
+          echo "=== Recovery features ==="
+
+          test -d "$TREE/recovery/root"
+
+          find "$TREE/recovery/root" \
+            -maxdepth 4 \
             -type f \
             | sort \
             | head -200
 
-      - name: Configure Infinity-X
+          echo
+          echo "=== BoardConfig ==="
+
+          grep -E \
+            '^(TARGET_ARCH|BOARD_KERNEL|BOARD_BOOTIMAGE|BOARD_RECOVERY|TW_|TARGET_RECOVERY)' \
+            "$TREE/BoardConfig.mk" \
+            || true
+
+      # ---------------------------------------------------------
+      # REMOVE GIT DATA TO SAVE SPACE
+      # ---------------------------------------------------------
+      - name: Remove device tree git data
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          rm -rf \
+            "$SOURCE_DIR/device/xiaomi/cupid/.git"
+
+          echo "Device tree .git removed."
+
+          df -h
+
+      # ---------------------------------------------------------
+      # CREATE BUILD ENVIRONMENT
+      # ---------------------------------------------------------
+      - name: Prepare TWRP environment
         shell: bash
         run: |
           set -eo pipefail
 
           cd "$SOURCE_DIR"
 
-          echo "=== Infinity-X environment ==="
+          cat > .cupid-build-env.sh <<'EOF'
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+          export LANG=C
+          export USE_CCACHE=0
+          EOF
 
+          cat .cupid-build-env.sh
+
+      # ---------------------------------------------------------
+      # CONFIGURE TWRP
+      # ---------------------------------------------------------
+      - name: Configure TWRP
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          source .cupid-build-env.sh
+
+          # Android/TWRP envsetup uses optional shell variables.
+          # Do NOT use nounset here.
           set +u
+
           source build/envsetup.sh
 
-          lunch "infinity_${DEVICE}-${BUILD_TYPE}"
+          lunch twrp_cupid-eng
 
-          echo "=== Build variables ==="
+          echo
+          echo "=== Lunch result ==="
 
           get_build_var TARGET_PRODUCT
-          get_build_var TARGET_DEVICE
+          get_build_var PRODUCT_DEVICE
+          get_build_var TARGET_ARCH
           get_build_var TARGET_BUILD_VARIANT
-          get_build_var PLATFORM_VERSION
-          get_build_var PLATFORM_SDK_VERSION
+
+          echo
+          echo "=== Recovery variables ==="
+
+          get_build_var TARGET_RECOVERY_FSTAB || true
+          get_build_var BOARD_RECOVERYIMAGE_PARTITION_SIZE || true
+          get_build_var BOARD_BOOTIMAGE_PARTITION_SIZE || true
 
           set -u
 
-      - name: Build recovery
+      # ---------------------------------------------------------
+      # BUILD RECOVERY
+      # ---------------------------------------------------------
+      - name: Build recovery image
         shell: bash
         run: |
           set -eo pipefail
 
           cd "$SOURCE_DIR"
 
+          source .cupid-build-env.sh
+
+          # Keep nounset disabled for Android build functions.
           set +u
+
           source build/envsetup.sh
-          lunch "infinity_${DEVICE}-${BUILD_TYPE}"
 
-          echo "=== Building recovery ==="
+          lunch twrp_cupid-eng
 
-          m recoveryimage -j2
+          echo
+          echo "========================================"
+          echo " BUILDING CUPID RECOVERY"
+          echo "========================================"
+
+          mka recoveryimage -j2
 
           set -u
 
+      # ---------------------------------------------------------
+      # VALIDATE RESULT
+      # ---------------------------------------------------------
       - name: Validate recovery
         shell: bash
         run: |
@@ -240,23 +350,58 @@ jobs:
 
           RECOVERY="$SOURCE_DIR/out/target/product/$DEVICE/recovery.img"
 
-          echo "Looking for:"
+          echo "Recovery:"
           echo "$RECOVERY"
 
           if [ ! -f "$RECOVERY" ]; then
+            echo
             echo "ERROR: recovery.img was not generated."
+            echo
+            find "$SOURCE_DIR/out/target/product/$DEVICE" \
+              -maxdepth 2 \
+              -type f \
+              | sort \
+              | head -200 || true
+
             exit 1
           fi
+
+          echo
+          echo "=== Recovery generated ==="
 
           ls -lh "$RECOVERY"
 
           file "$RECOVERY"
 
-      - name: Upload recovery artifact
+          sha256sum "$RECOVERY"
+
+      # ---------------------------------------------------------
+      # PACKAGE
+      # ---------------------------------------------------------
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          mkdir -p artifacts
+
+          cp \
+            "$SOURCE_DIR/out/target/product/$DEVICE/recovery.img" \
+            artifacts/recovery-cupid-A17.img
+
+          sha256sum \
+            artifacts/recovery-cupid-A17.img \
+            > artifacts/SHA256SUMS.txt
+
+          ls -lh artifacts/
+
+      # ---------------------------------------------------------
+      # UPLOAD
+      # ---------------------------------------------------------
+      - name: Upload recovery
         uses: actions/upload-artifact@v4
         with:
-          name: InfinityX-Recovery-Cupid-A17
-          path: |
-            infinityx/out/target/product/cupid/recovery.img
+          name: InfinityX-Cupid-Recovery-A17
+          path: artifacts/
           if-no-files-found: error
           retention-days: 30
