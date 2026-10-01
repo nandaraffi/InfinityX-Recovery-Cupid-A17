@@ -331,6 +331,9 @@ jobs:
 
           lunch twrp_cupid-eng
 
+          # Injecting name for TWR version
+          export TW_DEVICE_VERSION="-By Nndee V1"
+
           echo
           echo "========================================"
           echo " BUILDING CUPID RECOVERY"
