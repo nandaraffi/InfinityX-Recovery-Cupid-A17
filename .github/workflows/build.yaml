@@ -1,0 +1,262 @@
+name: Build Infinity-X Recovery Cupid A17
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      DEVICE: cupid
+      BUILD_TYPE: eng
+      SOURCE_DIR: infinityx
+
+      INFINITY_MANIFEST: https://github.com/ProjectInfinity-X/manifest.git
+      INFINITY_BRANCH: 17
+
+      DEVICE_TREE_REPO: https://github.com/cupid-development/android_device_xiaomi_cupid.git
+      DEVICE_TREE_BRANCH: main
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/julia* || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/powershell || true
+          sudo rm -rf /usr/local/share/chromium || true
+
+          sudo apt-get clean || true
+          sudo docker system prune -af || true
+
+          rm -rf "$HOME/.cache" || true
+          rm -rf "$HOME/.gradle" || true
+
+          df -h
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            adb \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            clang \
+            curl \
+            flex \
+            g++-multilib \
+            gcc-multilib \
+            git \
+            git-lfs \
+            gnupg \
+            gperf \
+            imagemagick \
+            lib32ncurses6 \
+            lib32readline-dev \
+            lib32z1-dev \
+            libelf-dev \
+            liblz4-tool \
+            libncurses6 \
+            libncurses-dev \
+            libssl-dev \
+            lzop \
+            openjdk-17-jdk \
+            pngcrush \
+            python3 \
+            python3-pip \
+            rsync \
+            schedtool \
+            squashfs-tools \
+            unzip \
+            xsltproc \
+            zip \
+            zlib1g-dev
+
+          git lfs install
+
+      - name: Install repo
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          mkdir -p "$HOME/bin"
+
+          curl -L \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+
+          chmod +x "$HOME/bin/repo"
+
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+          "$HOME/bin/repo" --version
+
+      - name: Initialize Infinity-X Android 17
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          mkdir -p "$SOURCE_DIR"
+          cd "$SOURCE_DIR"
+
+          repo init \
+            --depth=1 \
+            --no-repo-verify \
+            --git-lfs \
+            -u "$INFINITY_MANIFEST" \
+            -b "$INFINITY_BRANCH" \
+            -g default,-mips,-darwin,-notdefault
+
+      - name: Sync Infinity-X source
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          repo sync \
+            -c \
+            --no-clone-bundle \
+            --no-tags \
+            --optimized-fetch \
+            --prune \
+            --force-sync \
+            -j2
+
+      - name: Check Cupid device tree
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          test -n "$DEVICE_TREE_REPO"
+          test -n "$DEVICE_TREE_BRANCH"
+
+          git ls-remote \
+            --exit-code \
+            --heads \
+            "$DEVICE_TREE_REPO" \
+            "$DEVICE_TREE_BRANCH"
+
+      - name: Clone Cupid device tree
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          mkdir -p device/xiaomi
+
+          git clone \
+            --depth=1 \
+            --branch "$DEVICE_TREE_BRANCH" \
+            "$DEVICE_TREE_REPO" \
+            device/xiaomi/cupid
+
+      - name: Verify Cupid tree
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          echo "=== Cupid device tree ==="
+
+          test -d device/xiaomi/cupid
+          test -f device/xiaomi/cupid/AndroidProducts.mk
+          test -f device/xiaomi/cupid/BoardConfig.mk
+          test -f device/xiaomi/cupid/device.mk
+          test -f device/xiaomi/cupid/Android.bp
+
+          find device/xiaomi/cupid \
+            -maxdepth 2 \
+            -type f \
+            | sort \
+            | head -200
+
+      - name: Configure Infinity-X
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          echo "=== Infinity-X environment ==="
+
+          set +u
+          source build/envsetup.sh
+
+          lunch "infinity_${DEVICE}-${BUILD_TYPE}"
+
+          echo "=== Build variables ==="
+
+          get_build_var TARGET_PRODUCT
+          get_build_var TARGET_DEVICE
+          get_build_var TARGET_BUILD_VARIANT
+          get_build_var PLATFORM_VERSION
+          get_build_var PLATFORM_SDK_VERSION
+
+          set -u
+
+      - name: Build recovery
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          cd "$SOURCE_DIR"
+
+          set +u
+          source build/envsetup.sh
+          lunch "infinity_${DEVICE}-${BUILD_TYPE}"
+
+          echo "=== Building recovery ==="
+
+          m recoveryimage -j2
+
+          set -u
+
+      - name: Validate recovery
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          RECOVERY="$SOURCE_DIR/out/target/product/$DEVICE/recovery.img"
+
+          echo "Looking for:"
+          echo "$RECOVERY"
+
+          if [ ! -f "$RECOVERY" ]; then
+            echo "ERROR: recovery.img was not generated."
+            exit 1
+          fi
+
+          ls -lh "$RECOVERY"
+
+          file "$RECOVERY"
+
+      - name: Upload recovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: InfinityX-Recovery-Cupid-A17
+          path: |
+            infinityx/out/target/product/cupid/recovery.img
+          if-no-files-found: error
+          retention-days: 30
